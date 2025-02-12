@@ -1,17 +1,3 @@
-FROM owasp/zap2docker-stable
-
-RUN apt-get update && apt-get install -y curl unzip && \
-    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
-    ./aws/install
-
-WORKDIR /zap
-
-COPY run_scan.sh /zap/run_scan.sh
-RUN chmod +x /zap/run_scan.sh
-
-ENTRYPOINT ["/zap/run_scan.sh"]
-
 # syntax=docker/dockerfile:1
 # This dockerfile builds the zap stable release
 FROM --platform=linux/amd64 debian:bookworm-slim AS builder
