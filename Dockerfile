@@ -1,108 +1,49 @@
 # syntax=docker/dockerfile:1
+# This dockerfile builds the zap bare release
 FROM --platform=linux/amd64 debian:bookworm-slim AS builder
 
-ARG DEBIAN_FRONTEND=noninteractive
-
 RUN apt-get update && apt-get install -q -y --fix-missing \
-	openjdk-17-jdk \
 	wget \
 	curl \
-	unzip \
-	git && \
-	rm -rf /var/lib/apt/lists/* && \
-	mkdir /zap-src
-
-WORKDIR /zap-src
-
-# Pull the ZAP repo and build ZAP with weekly add-ons
-RUN git clone --depth 1 https://github.com/zaproxy/zaproxy.git && \
-	cd zaproxy && \
-	ZAP_WEEKLY_ADDONS_NO_TEST=true ./gradlew :zap:prepareDistWeekly
+	openjdk-17-jdk \
+	xmlstarlet \
+	unzip && \
+	rm -rf /var/lib/apt/lists/*
 
 WORKDIR /zap
 
-# Setup Webswing
-ENV WEBSWING_VERSION=24.2.2
-RUN curl -s -L "https://dev.webswing.org/files/public/webswing-examples-eval-${WEBSWING_VERSION}-distribution.zip" > webswing.zip && \
-    unzip webswing.zip && \
-    rm webswing.zip && \
-    mv webswing-* webswing && \
-    rm -Rf webswing/apps/
+# Download and expand the latest stable release
+RUN wget -qO- https://raw.githubusercontent.com/zaproxy/zap-admin/master/ZapVersions.xml | xmlstarlet sel -t -v //url |grep -i Linux | wget --content-disposition -i - -O - | tar zxv && \
+	mv ZAP*/* . && \
+	rm -R ZAP*
 
-FROM debian:bookworm-slim AS final
+# Update add-ons
+RUN ./zap.sh -cmd -silent -addonupdate
+# Copy them to installation directory
+RUN cp /root/.ZAP/plugin/*.zap plugin/ || :
+
+FROM eclipse-temurin:17-jre-alpine AS final
 LABEL maintainer="psiinon@gmail.com"
 
-ARG DEBIAN_FRONTEND=noninteractive
+RUN apk add --no-cache bash curl 
 
-RUN apt-get update && apt-get install -q -y --fix-missing \
-	make \
-	ant \
-	automake \
-	autoconf \
-	gcc g++ \
-	openjdk-17-jdk \
-	wget \
-	curl \
-	xmlstarlet \
-	unzip \
-	git \
-	openbox \
-	xterm \
-	net-tools \
-	python3-pip \
-	python-is-python3 \
-	firefox-esr \
-	vim \
-	xvfb \
-	x11vnc && \
-	rm -rf /var/lib/apt/lists/*  && \
-	useradd -u 1000 -d /home/zap -m -s /bin/bash zap && \
-	echo zap:zap | chpasswd && \
-	mkdir /zap  && \
-	chown zap:zap /zap
-
-RUN pip3 install \
-	--break-system-packages \
-	--no-cache-dir \
-	--upgrade \
-	awscli \
-	pip \
-	zaproxy \
-	pyyaml \
-	requests \
-	urllib3
-
-# Change to the zap user so things get done as the right person (apart from copy)
-USER zap
-
-RUN mkdir /home/zap/.vnc
-
-ARG TARGETARCH
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-$TARGETARCH
-ENV PATH=$JAVA_HOME/bin:/zap/:$PATH
-
-ENV ZAP_PATH=/zap/zap.sh
-ENV ZAP_PORT=8080
-ENV IS_CONTAINERIZED=true
-ENV HOME=/home/zap/
-ENV LC_ALL=C.UTF-8
-ENV LANG=C.UTF-8
-
-COPY --from=builder --chown=1000:1000 /zap-src/zaproxy/zap/build/distFilesWeekly/ /zap/
-COPY --chown=1000:1000 zap* CHANGELOG.md /zap/
-COPY --from=builder --chown=1000:1000 /zap/webswing /zap/webswing
-COPY --chown=1000:1000 webswing.config /zap/webswing/
-COPY --chown=1000:1000 webswing.properties /zap/webswing/
-COPY --chown=1000:1000 policies /home/zap/.ZAP_D/policies/
-COPY --chown=1000:1000 policies /root/.ZAP_D/policies/
-COPY --chown=1000:1000 scripts /home/zap/.ZAP_D/scripts/
-COPY --chown=1000:1000 .xinitrc /home/zap/
-COPY --chown=1000:1000 firefox /home/zap/.mozilla/firefox/
-
-RUN echo "zap2docker-live" > /zap/container && \
-    chmod a+x /home/zap/.xinitrc && \
-    chmod +x /zap/zap.sh
+USER root
 
 WORKDIR /zap
+COPY --from=builder --link --chown=1000:1000 /zap .
+COPY --link --chown=1000:1000 policies /home/zap/.ZAP/policies/
+
+RUN echo "zap2docker-bare" > /zap/container
+
+RUN /usr/sbin/adduser -u 1000 -h /home/zap -s /bin/bash -D zap
+
+#Change to the zap user so things get done as the right person (apart from copy)
+USER zap
+
+ENV PATH=$JAVA_HOME/bin:/zap/:$PATH
+ENV ZAP_PATH=/zap/zap.sh
+ENV HOME=/home/zap/
+ENV ZAP_PORT=8080
+ENV IS_CONTAINERIZED=true
 
 HEALTHCHECK CMD curl --silent --output /dev/null --fail http://localhost:$ZAP_PORT/ || exit 1
